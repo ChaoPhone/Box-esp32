@@ -17,7 +17,7 @@
 // =============================================================
 
 // ---------------- 协议常量 ----------------
-static const char *FIRMWARE_VERSION = "0.9.0-aesp";
+static const char *FIRMWARE_VERSION = "0.9.1-haptic-tilt";
 static const int PROTO_VERSION = 1;
 static const uint32_t ACK_TIMEOUT_MS = 300;
 static const int MAX_RETRY = 5;
@@ -130,6 +130,17 @@ static bool liftWzBaselineReady = false;
 static uint32_t liftDebounceUntil = 0;
 static uint32_t liftLastEmitMs = 0;
 
+// ---------------- 摇动检测（倾斜模式开关） ----------------
+// 摇动角度≥30°计为一次摇动，3次摇动在3秒窗口内触发 TILT_TOGGLE 事件
+// Z轴竖直（板子平放）时摇动XY平面，回落<15°后计为一次完整摇动
+static const float SHAKE_ANGLE_THRESH_DEG = 30.0f;
+static const float SHAKE_REARM_ANGLE_DEG = 15.0f;
+static const uint32_t SHAKE_WINDOW_MS = 3000;
+static const int SHAKE_COUNT_TARGET = 3;
+static int shakeCount = 0;
+static uint32_t shakeFirstMs = 0;
+static bool shakeArmed = true;
+
 // ---------------- 方向校准 ----------------
 static bool pushSwapXY = false;
 static int8_t pushSignX = 1, pushSignY = 1;
@@ -137,9 +148,46 @@ static int8_t pushSignX = 1, pushSignY = 1;
 // ==================== 工具函数 ====================
 static void setLed(uint8_t r, uint8_t g, uint8_t b) { neopixelWrite(RGB_LED_PIN, r, g, b); }
 
+// ---------- 电机模式队列（多次脉冲，如胜利三震） ----------
+struct MotorStep { uint8_t on; uint32_t ms; };
+static const int MAX_MOTOR_STEPS = 8;
+static MotorStep motorSteps[MAX_MOTOR_STEPS];
+static int motorPatternCount = 0;
+static int motorPatternIdx = 0;
+static uint32_t motorPatternStepEnd = 0;
+
 static void motorOn(uint8_t strength, uint32_t ms) {
   ledcWrite(MOTOR_PWM_CH, strength);
   motorEndMs = millis() + ms;
+  motorPatternCount = 0;  // 取消模式播放
+}
+
+static void motorQueuePattern(const MotorStep *steps, int n) {
+  if (n > MAX_MOTOR_STEPS) n = MAX_MOTOR_STEPS;
+  memcpy(motorSteps, steps, sizeof(MotorStep) * n);
+  motorPatternCount = n;
+  motorPatternIdx = 0;
+  motorPatternStepEnd = 0;
+  motorEndMs = 0;
+}
+
+static void motorTick() {
+  uint32_t now = millis();
+  if (motorPatternCount > 0) {
+    if (motorPatternStepEnd == 0 || now >= motorPatternStepEnd) {
+      if (motorPatternIdx >= motorPatternCount) {
+        ledcWrite(MOTOR_PWM_CH, 0);
+        motorPatternCount = 0;
+        return;
+      }
+      ledcWrite(MOTOR_PWM_CH, motorSteps[motorPatternIdx].on);
+      motorPatternStepEnd = now + motorSteps[motorPatternIdx].ms;
+      motorPatternIdx++;
+    }
+  } else if (motorEndMs && now >= motorEndMs) {
+    ledcWrite(MOTOR_PWM_CH, 0);
+    motorEndMs = 0;
+  }
 }
 
 static void sendLog(const char *text) {
@@ -354,6 +402,7 @@ static void pushDetectReset() {
   tiltNeedRearm = false; tiltQuietSince = 0;
   liftWzBaselineReady = false; liftWzMA = 0;
   liftDebounceUntil = 0;
+  shakeCount = 0; shakeFirstMs = 0; shakeArmed = true;
 }
 
 static const char* pushDetect(float bx, float by) {
@@ -441,6 +490,48 @@ static const char* liftDetect(float wzWorld) {
   return "LIFT_UP";
 }
 
+// ==================== 摇动检测（倾斜模式开关） ====================
+// 从四元数计算 pitch/roll，取最大倾角。
+// 倾角≥30°计为一次摇动，回落<15°后武装下一次。
+// 3次摇动在3秒窗口内 → 发射 EVT TILT_TOGGLE（切换倾斜模式开关）。
+static void shakeDetect() {
+  float qw = mahonyQ[0], qx = mahonyQ[1], qy = mahonyQ[2], qz = mahonyQ[3];
+  float roll = atan2f(2.0f*(qw*qx+qy*qz), 1.0f-2.0f*(qx*qx+qy*qy));
+  float sinp = 2.0f*(qw*qy-qz*qx);
+  if (sinp > 1.0f) sinp = 1.0f; if (sinp < -1.0f) sinp = -1.0f;
+  float pitch = asinf(sinp);
+  float pitchDeg = pitch * 57.29578f;
+  float rollDeg  = roll  * 57.29578f;
+  float maxAngle = (fabsf(pitchDeg) > fabsf(rollDeg)) ? fabsf(pitchDeg) : fabsf(rollDeg);
+
+  uint32_t now = millis();
+  if (now < pushArmedAt) return;
+
+  // 超时重置窗口
+  if (shakeCount > 0 && now - shakeFirstMs > SHAKE_WINDOW_MS) {
+    shakeCount = 0; shakeFirstMs = 0;
+  }
+
+  // 上升沿：倾角超过阈值且已武装
+  if (shakeArmed && maxAngle >= SHAKE_ANGLE_THRESH_DEG) {
+    shakeArmed = false;
+    if (shakeCount == 0) shakeFirstMs = now;
+    shakeCount++;
+    // 摇动即时短震反馈
+    motorOn(255, 40);
+    // 达到目标次数 → 发射切换事件
+    if (shakeCount >= SHAKE_COUNT_TARGET) {
+      emitEvent("TILT_TOGGLE", (float)shakeCount);
+      shakeCount = 0; shakeFirstMs = 0;
+    }
+  }
+
+  // 下降沿：回落到低角度后重新武装
+  if (!shakeArmed && maxAngle < SHAKE_REARM_ANGLE_DEG) {
+    shakeArmed = true;
+  }
+}
+
 // ==================== 下行命令处理 ====================
 static void handleCommand(const char *raw) {
   String line(raw); line.trim();
@@ -469,11 +560,19 @@ static void handleCommand(const char *raw) {
     pattern.trim();
     uint32_t duration = 150;
     if (c >= 0) { String msStr = args.substring(c+1); msStr.trim(); if (msStr.length()>0) duration = msStr.toInt(); }
-    uint8_t strength = 200;
-    if (pattern == "short") duration = 50;
-    else if (pattern == "long") duration = 300;
-    else { int s = pattern.toInt(); if (s>0 && s<=255) strength = (uint8_t)s; }
-    motorOn(strength, duration);
+    uint8_t strength = 255;
+    if (pattern == "short") { motorOn(255, 50); }
+    else if (pattern == "long") { motorOn(255, 300); }
+    else if (pattern.equalsIgnoreCase("win")) {
+      // 胜利长震三次：300ms 开，100ms 关，重复三次
+      MotorStep winSteps[] = {
+        {255, 300}, {0, 100},
+        {255, 300}, {0, 100},
+        {255, 300}
+      };
+      motorQueuePattern(winSteps, 5);
+    }
+    else { int s = pattern.toInt(); if (s>0 && s<=255) strength = (uint8_t)s; motorOn(strength, duration); }
     setLed(LED_BRIGHTNESS, 0, LED_BRIGHTNESS);
     return;
   }
@@ -596,6 +695,9 @@ void loop() {
           motorOn(255, 150);
         }
 
+        // 摇动检测（倾斜模式开关）
+        shakeDetect();
+
         // 上报 IMUQ
         uint32_t interval = debugMode ? IMU_STREAM_DEBUG_MS : IMU_STREAM_NORMAL_MS;
         if (nowMs - lastImuStream >= interval) {
@@ -615,9 +717,6 @@ void loop() {
     espnowSendStr(buf);
   }
 
-  // 电机超时
-  if (motorEndMs && now >= motorEndMs) {
-    ledcWrite(MOTOR_PWM_CH, 0);
-    motorEndMs = 0;
-  }
+  // 电机超时/模式播放
+  motorTick();
 }
