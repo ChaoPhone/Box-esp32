@@ -130,39 +130,11 @@ static bool liftWzBaselineReady = false;
 static uint32_t liftDebounceUntil = 0;
 static uint32_t liftLastEmitMs = 0;
 
-// ---------------- 摇动检测（倾斜模式开关） ----------------
-// 摇动角度≥30°计为一次摇动，3次摇动在3秒窗口内触发 TILT_TOGGLE 事件
-// Z轴竖直（板子平放）时摇动XY平面，回落<15°后计为一次完整摇动
-static const float SHAKE_ANGLE_THRESH_DEG = 30.0f;
-static const float SHAKE_REARM_ANGLE_DEG = 15.0f;
-static const uint32_t SHAKE_WINDOW_MS = 3000;
-static const int SHAKE_COUNT_TARGET = 3;
-static int shakeCount = 0;
-static uint32_t shakeFirstMs = 0;
-
-// ---- Z轴旋转计数：绕 Z 轴旋转 3 圈 → Undo ----
-static float    yawPrev = 0;           // 上一次 yaw 角度（用于计算增量）
-static bool     yawPrevValid = false;
-static float    yawAccumDeg = 0;       // 累积旋转角度
-static int      yawLaps = 0;           // 完成圈数
-static uint32_t yawLastActivity = 0;   // 上次旋转活动时刻（用于超时重置）
-static const float YAW_LAP_DEG = 360.0f;
-static const int YAW_LAPS_UNDO = 3;
-static const uint32_t YAW_IDLE_RESET_MS = 2000;  // 2 秒无显著旋转则重置计数
-static const float YAW_MIN_DEG_PER_S = 60.0f;     // 低于此速率不计数（防漂移）
-static bool shakeArmed = true;
-
-// ---------------- Z轴旋转检测（撤销） ----------------
-// 绕Z轴旋转≥90°触发UNDO（返回上一步），回落<30°后武装下一次
-// 静止时缓慢追踪参考角以消除yaw漂移
-static const float ROT_YAW_THRESH_DEG = 90.0f;
-static const float ROT_YAW_REARM_DEG = 30.0f;
-static const uint32_t ROT_DEBOUNCE_MS = 1500;
-static float yawRef = 0;
-static bool yawRefReady = false;
-static uint32_t rotDebounceUntil = 0;
-static bool rotNeedRearm = false;
-static uint32_t rotQuietSince = 0;
+// ---- 翻面检测：翻转 > 80° → UNDO ----
+static const float FLIP_THRESH_DEG = 80.0f;       // 翻面触发角度
+static const uint32_t FLIP_DEBOUNCE_MS = 2000;     // 触发后锁定
+static bool flipArmed = true;
+static uint32_t flipLastMs = 0;
 
 // ---------------- 方向校准 ----------------
 static bool pushSwapXY = false;
@@ -425,7 +397,7 @@ static void pushDetectReset() {
   tiltNeedRearm = false; tiltQuietSince = 0;
   liftWzBaselineReady = false; liftWzMA = 0;
   liftDebounceUntil = 0;
-  shakeCount = 0; shakeFirstMs = 0; shakeArmed = true;
+  flipArmed = true;
 }
 
 static const char* pushDetect(float bx, float by) {
@@ -513,47 +485,7 @@ static const char* liftDetect(float wzWorld) {
   return "LIFT_UP";
 }
 
-// ==================== 摇动检测（倾斜模式开关） ====================
-// 从四元数计算 pitch/roll，取最大倾角。
-// 倾角≥30°计为一次摇动，回落<15°后武装下一次。
-// 3次摇动在3秒窗口内 → 发射 EVT TILT_TOGGLE（切换倾斜模式开关）。
-static void shakeDetect() {
-  float qw = mahonyQ[0], qx = mahonyQ[1], qy = mahonyQ[2], qz = mahonyQ[3];
-  float roll = atan2f(2.0f*(qw*qx+qy*qz), 1.0f-2.0f*(qx*qx+qy*qy));
-  float sinp = 2.0f*(qw*qy-qz*qx);
-  if (sinp > 1.0f) sinp = 1.0f; if (sinp < -1.0f) sinp = -1.0f;
-  float pitch = asinf(sinp);
-  float pitchDeg = pitch * 57.29578f;
-  float rollDeg  = roll  * 57.29578f;
-  float maxAngle = (fabsf(pitchDeg) > fabsf(rollDeg)) ? fabsf(pitchDeg) : fabsf(rollDeg);
-
-  uint32_t now = millis();
-  if (now < pushArmedAt) return;
-
-  // 超时重置窗口
-  if (shakeCount > 0 && now - shakeFirstMs > SHAKE_WINDOW_MS) {
-    shakeCount = 0; shakeFirstMs = 0;
-  }
-
-  // 上升沿：倾角超过阈值且已武装
-  if (shakeArmed && maxAngle >= SHAKE_ANGLE_THRESH_DEG) {
-    shakeArmed = false;
-    if (shakeCount == 0) shakeFirstMs = now;
-    shakeCount++;
-    // 摇动即时短震反馈
-    motorOn(255, 40);
-    // 达到目标次数 → 发射切换事件
-    if (shakeCount >= SHAKE_COUNT_TARGET) {
-      emitEvent("TILT_TOGGLE", (float)shakeCount);
-      shakeCount = 0; shakeFirstMs = 0;
-    }
-  }
-
-  // 下降沿：回落到低角度后重新武装
-  if (!shakeArmed && maxAngle < SHAKE_REARM_ANGLE_DEG) {
-    shakeArmed = true;
-  }
-}
+// ==================== 下行命令处理 ====================
 
 // ==================== 下行命令处理 ====================
 static void handleCommand(const char *raw) {
@@ -703,21 +635,21 @@ void loop() {
         float bx = cy*wx + sy*wy, by = -sy*wx + cy*wy;
         uint32_t nowMs = millis();
 
-        // ---- Z轴旋转计数：绕 Z 轴旋转 3 圈 → Undo ----
-        if (yawPrevValid) {
-          float dy = yaw - yawPrev;
-          if (dy >  M_PI) dy -= 2.0f * M_PI;
-          if (dy < -M_PI) dy += 2.0f * M_PI;
-          float dDeg = fabsf(dy) * 57.29578f;
-          if (dDeg / dt >= YAW_MIN_DEG_PER_S) {
-            yawAccumDeg += dDeg;
-            yawLastActivity = nowMs;
-            while (yawAccumDeg >= YAW_LAP_DEG) { yawAccumDeg -= YAW_LAP_DEG; yawLaps++; }
-            if (yawLaps >= YAW_LAPS_UNDO) { espnowSendStr("UNDO"); yawLaps = 0; yawAccumDeg = 0; }
+        // ---- 翻面检测：翻转 > 80° → UNDO ----
+        {
+          float qwf = mahonyQ[0], qxf = mahonyQ[1], qyf = mahonyQ[2], qzf = mahonyQ[3];
+          float rf  = atan2f(2.0f*(qwf*qxf+qyf*qzf), 1.0f-2.0f*(qxf*qxf+qyf*qyf));
+          float sp  = 2.0f*(qwf*qyf-qzf*qxf);
+          if (sp >  1.0f) sp =  1.0f;
+          if (sp < -1.0f) sp = -1.0f;
+          float maxA = fmaxf(fabsf(rf * 57.29578f), fabsf(asinf(sp) * 57.29578f));
+          if (maxA > FLIP_THRESH_DEG && flipArmed && nowMs - flipLastMs > FLIP_DEBOUNCE_MS) {
+            espnowSendStr("UNDO");
+            flipArmed = false;
+            flipLastMs = nowMs;
           }
+          if (maxA < 30.0f) flipArmed = true; // 回正后重新武装
         }
-        yawPrev = yaw; yawPrevValid = true;
-        if (yawLaps > 0 && nowMs - yawLastActivity > YAW_IDLE_RESET_MS) { yawLaps = 0; yawAccumDeg = 0; }
 
         // 倾斜 → 已改为持续状态 TILTS 消息上报（不再发 EVT）
         float tiltVal = 0;
@@ -733,9 +665,6 @@ void loop() {
           emitEvent(liftDir, 200.0f);
           motorOn(255, 150);
         }
-
-        // 摇动检测（倾斜模式开关）
-        shakeDetect();
 
         // 上报 IMUQ
         uint32_t interval = debugMode ? IMU_STREAM_DEBUG_MS : IMU_STREAM_NORMAL_MS;
