@@ -139,7 +139,30 @@ static const uint32_t SHAKE_WINDOW_MS = 3000;
 static const int SHAKE_COUNT_TARGET = 3;
 static int shakeCount = 0;
 static uint32_t shakeFirstMs = 0;
+
+// ---- Z轴旋转计数：绕 Z 轴旋转 3 圈 → Undo ----
+static float    yawPrev = 0;           // 上一次 yaw 角度（用于计算增量）
+static bool     yawPrevValid = false;
+static float    yawAccumDeg = 0;       // 累积旋转角度
+static int      yawLaps = 0;           // 完成圈数
+static uint32_t yawLastActivity = 0;   // 上次旋转活动时刻（用于超时重置）
+static const float YAW_LAP_DEG = 360.0f;
+static const int YAW_LAPS_UNDO = 3;
+static const uint32_t YAW_IDLE_RESET_MS = 2000;  // 2 秒无显著旋转则重置计数
+static const float YAW_MIN_DEG_PER_S = 60.0f;     // 低于此速率不计数（防漂移）
 static bool shakeArmed = true;
+
+// ---------------- Z轴旋转检测（撤销） ----------------
+// 绕Z轴旋转≥90°触发UNDO（返回上一步），回落<30°后武装下一次
+// 静止时缓慢追踪参考角以消除yaw漂移
+static const float ROT_YAW_THRESH_DEG = 90.0f;
+static const float ROT_YAW_REARM_DEG = 30.0f;
+static const uint32_t ROT_DEBOUNCE_MS = 1500;
+static float yawRef = 0;
+static bool yawRefReady = false;
+static uint32_t rotDebounceUntil = 0;
+static bool rotNeedRearm = false;
+static uint32_t rotQuietSince = 0;
 
 // ---------------- 方向校准 ----------------
 static bool pushSwapXY = false;
@@ -679,6 +702,22 @@ void loop() {
         float cy = cosf(yaw), sy = sinf(yaw);
         float bx = cy*wx + sy*wy, by = -sy*wx + cy*wy;
         uint32_t nowMs = millis();
+
+        // ---- Z轴旋转计数：绕 Z 轴旋转 3 圈 → Undo ----
+        if (yawPrevValid) {
+          float dy = yaw - yawPrev;
+          if (dy >  M_PI) dy -= 2.0f * M_PI;
+          if (dy < -M_PI) dy += 2.0f * M_PI;
+          float dDeg = fabsf(dy) * 57.29578f;
+          if (dDeg / dt >= YAW_MIN_DEG_PER_S) {
+            yawAccumDeg += dDeg;
+            yawLastActivity = nowMs;
+            while (yawAccumDeg >= YAW_LAP_DEG) { yawAccumDeg -= YAW_LAP_DEG; yawLaps++; }
+            if (yawLaps >= YAW_LAPS_UNDO) { espnowSendStr("UNDO"); yawLaps = 0; yawAccumDeg = 0; }
+          }
+        }
+        yawPrev = yaw; yawPrevValid = true;
+        if (yawLaps > 0 && nowMs - yawLastActivity > YAW_IDLE_RESET_MS) { yawLaps = 0; yawAccumDeg = 0; }
 
         // 倾斜 → 已改为持续状态 TILTS 消息上报（不再发 EVT）
         float tiltVal = 0;

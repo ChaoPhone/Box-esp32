@@ -118,7 +118,7 @@ static bool isProtocolLine(const char *s) {
   static const char *PREFIX[] = {
     "EVT,", "ACK,", "HEARTBEAT,", "HAPTIC,", "STATE,",
     "BOOT,", "LOG,", "IMUQ,", "IMU,", "PONG,", "OK,", "NAK,",
-    "TILTS,", "CALIBRATE", "DEBUG,"
+    "TILTS,", "CALIBRATE", "DEBUG,", "UNDO"
   };
   for (auto p : PREFIX) {
     if (strncmp(s, p, strlen(p)) == 0) return true;
