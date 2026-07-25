@@ -327,6 +327,22 @@ static void sendImuQuat() {
   espnowSendStr(buf);
 }
 
+// 倾斜持续状态上报（与 IMUQ 同频）：TILTS,<pitchDeg>,<rollDeg>,<ms>
+static void sendTiltState() {
+  float qw = mahonyQ[0], qx = mahonyQ[1], qy = mahonyQ[2], qz = mahonyQ[3];
+  float roll  = atan2f(2.0f*(qw*qx+qy*qz), 1.0f-2.0f*(qx*qx+qy*qy));
+  float sinp  = 2.0f*(qw*qy-qz*qx);
+  if (sinp >  1.0f) sinp =  1.0f;
+  if (sinp < -1.0f) sinp = -1.0f;
+  float pitch = asinf(sinp);
+  float rollDeg  = roll  * 57.29578f;
+  float pitchDeg = pitch * 57.29578f;
+  char buf[96];
+  snprintf(buf, sizeof(buf), "TILTS,%.2f,%.2f,%lu",
+           pitchDeg, rollDeg, (unsigned long)millis());
+  espnowSendStr(buf);
+}
+
 // ==================== 推动检测 ====================
 static void pushDetectReset() {
   pushBaselineReady = false;
@@ -586,6 +602,7 @@ void loop() {
         if (nowMs - lastImuStream >= interval) {
           lastImuStream = nowMs;
           sendImuQuat();
+          sendTiltState();
         }
       }
     }

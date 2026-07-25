@@ -44,6 +44,7 @@ TYPE,arg1,arg2,...,argN\n
 | `NAK` | `NAK,<TYPE>,<reason>` | 下行命令被拒绝或未识别。 |
 | `PONG` | `PONG` 或 `PONG,<token>` | 对下行 `PING` 的应答。 |
 | `IMUQ` | `IMUQ,<qw>,<qx>,<qy>,<qz>,<ms>` | Mahony 互补滤波后的四元数姿态（4 位小数），常态+DEBUG 均上报。**推荐 Unity 用此消息获取姿态。** |
+| `TILTS` | `TILTS,<pitch>,<roll>,<ms>` | 倾斜持续状态（pitch/roll 角度°，20Hz），供弹珠模式持续消费。 |
 | `IMU` | `IMU,<ax>,<ay>,<az>,<gx>,<gy>,<gz>,<ms>` | 原始遥测（加速度 g / 角速度 °/s），**仅 DEBUG 模式**。 |
 | `LOG` | `LOG,<text>` | 人类可读日志，无需机器解析。 |
 
