@@ -131,20 +131,26 @@ static uint32_t liftDebounceUntil = 0;
 static uint32_t liftLastEmitMs = 0;
 
 // ---- 翻面检测：翻转 > 80° → UNDO ----
-static const float FLIP_THRESH_DEG = 80.0f;       // 翻面触发角度
-static const uint32_t FLIP_DEBOUNCE_MS = 2000;     // 触发后冷却
-static const uint32_t FLIP_HOLD_MS = 300;           // 需持续翻转时长（防误触）
-static bool flipArmed = true;
-static uint32_t flipLastMs = 0;
-static uint32_t flipStartMs = 0;
-static bool flipConfirmed = false;
+// ---- UNDO: 快速翻转 90°→110°→回落, 0.5s 内 ----
+enum FuState { FU_IDLE, FU_OVER_90, FU_OVER_110 };
+static FuState fuState = FU_IDLE;
+static uint32_t fuStartMs = 0;
+static const float FU_90 = 90.0f;
+static const float FU_110 = 110.0f;
+static const uint32_t FU_TIMEOUT = 500;
 
-// ---- 弹珠模式：保持倾斜 > 45° 持续 2s → 进入, 放平自动退出 ----
+// ---- RESET: >110° 保持 2s ----
+static const float RESET_THRESH = 110.0f;
+static const uint32_t RESET_HOLD = 2000;
+static bool resetArmed = true;
+static uint32_t resetStartMs = 0;
+
+// ---- 弹珠: [45°, 90°] 保持 3s → 进入/退出 ----
 static bool marbleActive = false;
-static uint32_t marbleTiltStart = 0;
-static const float MARBLE_ENTER_DEG = 45.0f;
-static const float MARBLE_EXIT_DEG = 15.0f;
-static const uint32_t MARBLE_HOLD_MS = 2000;
+static uint32_t marbleStartMs = 0;
+static const float MARBLE_MIN = 45.0f;
+static const float MARBLE_MAX = 90.0f;
+static const uint32_t MARBLE_HOLD = 3000;
 
 // ---------------- 方向校准 ----------------
 static bool pushSwapXY = false;
@@ -407,11 +413,9 @@ static void pushDetectReset() {
   tiltNeedRearm = false; tiltQuietSince = 0;
   liftWzBaselineReady = false; liftWzMA = 0;
   liftDebounceUntil = 0;
-  flipArmed = true;
-  flipStartMs = 0;
-  flipConfirmed = false;
-  marbleActive = false;
-  marbleTiltStart = 0;
+  fuState = FU_IDLE; fuStartMs = 0;
+  resetArmed = true; resetStartMs = 0;
+  marbleActive = false; marbleStartMs = 0;
 }
 
 static const char* pushDetect(float bx, float by) {
@@ -649,43 +653,60 @@ void loop() {
         float bx = cy*wx + sy*wy, by = -sy*wx + cy*wy;
         uint32_t nowMs = millis();
 
-        // ---- 翻面检测：翻转 > 80° 保持 300ms → UNDO ----
+        // ---- 翻面检测：翻转 > 80° 保持 2s → RESET, 回正立即重新武装 ----
         {
           float qwf = mahonyQ[0], qxf = mahonyQ[1], qyf = mahonyQ[2], qzf = mahonyQ[3];
           float rf  = atan2f(2.0f*(qwf*qxf+qyf*qzf), 1.0f-2.0f*(qxf*qxf+qyf*qyf));
           float sp  = 2.0f*(qwf*qyf-qzf*qxf);
-          if (sp >  1.0f) sp =  1.0f;
-          if (sp < -1.0f) sp = -1.0f;
+          if (sp >  1.0f) sp =  1.0f; if (sp < -1.0f) sp = -1.0f;
           float maxA = fmaxf(fabsf(rf * 57.29578f), fabsf(asinf(sp) * 57.29578f));
 
-          if (maxA > FLIP_THRESH_DEG && flipArmed && !flipConfirmed) {
-            if (flipStartMs == 0) flipStartMs = nowMs;
-            else if (nowMs - flipStartMs > FLIP_HOLD_MS && nowMs - flipLastMs > FLIP_DEBOUNCE_MS) {
-              emitEvent("UNDO", 0);
-              flipArmed = false; flipConfirmed = true; flipLastMs = nowMs;
-              motorOn(200, 100); // 短震确认
-            }
-          } else if (maxA < FLIP_THRESH_DEG - 10.0f) {
-            flipStartMs = 0;
-            flipConfirmed = false;
+          // ---- UNDO: 0.5s 内 90°→110°→回落 ----
+          switch (fuState) {
+            case FU_IDLE:
+              if (maxA >= FU_90) { fuState = FU_OVER_90; fuStartMs = nowMs; }
+              break;
+            case FU_OVER_90:
+              if (maxA < 45.0f) { fuState = FU_IDLE; }
+              else if (nowMs - fuStartMs > FU_TIMEOUT) { fuState = FU_IDLE; }
+              else if (maxA >= FU_110) { fuState = FU_OVER_110; }
+              break;
+            case FU_OVER_110:
+              if (maxA < 45.0f) { fuState = FU_IDLE; }
+              else if (maxA < FU_110) {
+                emitEvent("UNDO", 0); motorOn(255, 80);
+                fuState = FU_IDLE;
+              }
+              break;
           }
 
-          // 弹珠模式：保持倾斜 > 45° 持续 2s → 进入, 放平 < 15° → 退出
-          if (!marbleActive && maxA > MARBLE_ENTER_DEG) {
-            if (marbleTiltStart == 0) marbleTiltStart = nowMs;
-            else if (nowMs - marbleTiltStart > MARBLE_HOLD_MS) {
-              emitEvent("MARBLE_ENTER", 0);
-              marbleActive = true; marbleTiltStart = 0;
-              motorOn(255, 80); // 短震
+          // ---- RESET: >110° 保持 2s ----
+          if (maxA > RESET_THRESH && resetArmed) {
+            if (resetStartMs == 0) resetStartMs = nowMs;
+            else if (nowMs - resetStartMs > RESET_HOLD) {
+              emitEvent("RESET", 0); motorOn(255, 150);
+              resetArmed = false; resetStartMs = 0;
             }
-          } else if (marbleActive && maxA < MARBLE_EXIT_DEG) {
-            emitEvent("MARBLE_EXIT", 0);
-            marbleActive = false; marbleTiltStart = 0;
-          } else if (maxA < MARBLE_ENTER_DEG - 5.0f) {
-            marbleTiltStart = 0; // 放平重置计时
+          } else {
+            resetStartMs = 0;
           }
+          if (maxA < 30.0f) resetArmed = true;
 
-          if (maxA < 30.0f) flipArmed = true; // 翻面回正重新武装
+          // ---- 弹珠: [45°, 90°] 保持 3s ----
+          bool inMarbleRange = (maxA >= MARBLE_MIN && maxA <= MARBLE_MAX);
+          if (inMarbleRange) {
+            if (marbleStartMs == 0) marbleStartMs = nowMs;
+            else if (nowMs - marbleStartMs > MARBLE_HOLD) {
+              if (!marbleActive) {
+                emitEvent("MARBLE_ENTER", 0); marbleActive = true;
+              } else {
+                emitEvent("MARBLE_EXIT", 0); marbleActive = false;
+              }
+              marbleStartMs = 0; motorOn(255, 80);
+            }
+          } else {
+            marbleStartMs = 0;
+          }
         }
 
         // 倾斜 → 已改为持续状态 TILTS 消息上报（不再发 EVT）
