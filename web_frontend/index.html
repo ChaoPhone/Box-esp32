@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>B-Box 移动 Action 测试面板</title>
+  <style>
+    :root {
+      --bg: #0d1117; --panel: #161b22; --panel2: #1c232c; --border: #30363d;
+      --text: #c9d1d9; --dim: #8b949e; --accent: #58a6ff;
+      --green: #3fb950; --red: #f85149; --yellow: #d2991d; --purple: #bc8cff;
+      --fwd: #3fb950; --back: #f85149; --left: #58a6ff; --right: #d2991d;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+      display: flex; flex-direction: column; font-size: 13px;
+    }
+    .mono { font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+
+    /* ---- 工具栏 ---- */
+    #toolbar {
+      display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+      background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
+    }
+    #toolbar h1 { font-size: 15px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+    .btn {
+      padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: #21262d; color: var(--text); cursor: pointer; font-size: 12px;
+      transition: background .12s, transform .05s; white-space: nowrap;
+    }
+    .btn:hover { background: #30363d; }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.accent { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .btn.accent:hover { background: #388bfd; }
+    .btn.danger { background: #da3633; border-color: #da3633; color: #fff; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.off { background: var(--red); }
+    #status-text { color: var(--dim); font-size: 12px; }
+    .spacer { flex: 1; }
+
+    /* ---- 主区域 ---- */
+    #main { display: flex; flex: 1; min-height: 0; }
+    .col { display: flex; flex-direction: column; min-height: 0; }
+    #col-left { width: 320px; border-right: 1px solid var(--border); }
+    #col-mid { flex: 1; border-right: 1px solid var(--border); }
+    #col-right { width: 340px; }
+    .pane {
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      padding: 10px 12px; display: flex; flex-direction: column; min-height: 0;
+    }
+    .pane:last-child { border-bottom: none; }
+    .pane h2 {
+      font-size: 12px; color: var(--accent); margin-bottom: 8px; font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .pane h2 .hint { color: var(--dim); font-weight: 400; font-size: 10px; }
+
+    /* ---- 命令行 ---- */
+    .cmd-row { display: flex; gap: 5px; margin-top: 6px; align-items: center; }
+    .cmd-row select {
+      background: #0d1117; border: 1px solid var(--border); color: var(--text);
+      border-radius: 5px; padding: 5px 6px; font-size: 12px;
+    }
+
+    /* ---- 事件统计 ---- */
+    #event-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .stat {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 8px; display: flex; flex-direction: column; align-items: center;
+    }
+    .stat .name { font-size: 10px; color: var(--dim); }
+    .stat .num { font-size: 22px; font-weight: 700; font-family: "Cascadia Code", monospace; }
+    .stat.fwd .num { color: var(--fwd); }
+    .stat.back .num { color: var(--back); }
+    .stat.left .num { color: var(--left); }
+    .stat.right .num { color: var(--right); }
+    .stat.rot .num { color: var(--purple); }
+    .stat.other .num { color: var(--text); }
+    #last-event {
+      margin-top: 8px; padding: 6px 8px; background: var(--panel2); border-radius: 5px;
+      font-family: "Cascadia Code", monospace; font-size: 11px; color: var(--dim);
+    }
+    #last-event b { color: var(--accent); }
+
+    /* ---- 消息流 ---- */
+    #col-mid .pane { flex: 1; }
+    #msg-stream {
+      flex: 1; overflow-y: auto; background: #010409; border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px; font-family: "Cascadia Code", monospace;
+      font-size: 11px; line-height: 1.5;
+    }
+    .msg { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
+    .msg .ts { color: #484f58; }
+    .msg .ty { font-weight: 700; }
+    .ty-EVT { color: #79c0ff; } .ty-IMU { color: #bc8cff; } .ty-IMUQ { color: #d2a8ff; }
+    .ty-OK { color: #3fb950; } .ty-NAK { color: #f85149; } .ty-LOG { color: #8b949e; }
+    .ty-HEARTBEAT { color: #d2991d; } .ty-BOOT { color: #58a6ff; } .ty-PONG { color: #3fb950; }
+    .stream-ctrl { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .stream-ctrl label { font-size: 11px; color: var(--dim); display: flex; gap: 4px; align-items: center; }
+
+    /* ---- IMU 可视化 ---- */
+    .imu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .imu-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .imu-cell {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+    }
+    .imu-cell .lbl { font-size: 10px; color: var(--dim); }
+    .imu-cell .val { font-family: "Cascadia Code", monospace; font-size: 13px; color: #fff; }
+    .imu-cell .val.big { font-size: 17px; font-weight: 700; }
+    #compass-wrap { position: relative; width: 100%; aspect-ratio: 1; max-width: 300px; margin: 4px auto; }
+    #compass { width: 100%; height: 100%; }
+
+    /* ---- 姿态立方体 ---- */
+    #cube-stage { perspective: 480px; width: 110px; height: 110px; margin: 4px auto; }
+    #cube { position: relative; width: 110px; height: 110px; transform-style: preserve-3d; transition: none; }
+    .face {
+      position: absolute; width: 110px; height: 110px; border: 1px solid #30363d;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; color: #fff; opacity: .82;
+    }
+    .face.f { transform: translateZ(55px); background: #1f6feb55; }       /* 前 */
+    .face.b { transform: rotateY(180deg) translateZ(55px); background: #da363355; } /* 后 */
+    .face.l { transform: rotateY(-90deg) translateZ(55px); background: #58a6ff55; } /* 左 */
+    .face.r { transform: rotateY(90deg) translateZ(55px); background: #d2991d55; }   /* 右 */
+    .face.u { transform: rotateX(90deg) translateZ(55px); background: #3fb95055; }   /* 上 */
+    .face.d { transform: rotateX(-90deg) translateZ(55px); background: #8b949e55; }  /* 下 */
+
+    .note { font-size: 10px; color: var(--dim); line-height: 1.5; margin-top: 4px; }
+
+    .kv { display: flex; justify-content: space-between; font-size: 11px; }
+    .kv .k { color: var(--dim); }
+    .kv .v { color: #fff; font-family: "Cascadia Code", monospace; }
+
+    /* ---- 引导采集遮罩 ---- */
+    #rec-overlay {
+      position: fixed; inset: 0; z-index: 100; background: rgba(1, 4, 9, .92);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    }
+    #rec-overlay[hidden] { display: none; }
+    #rec-progress { color: var(--dim); font-size: 14px; }
+    #rec-arrow { font-size: 120px; line-height: 1; font-weight: 700; }
+    #rec-instruction { font-size: 26px; font-weight: 600; text-align: center; padding: 0 24px; }
+    #rec-bar { width: min(60vw, 480px); height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+    #rec-bar-fill { height: 100%; width: 100%; background: var(--accent); }
+    #rec-stats-line { color: var(--dim); font-size: 12px; font-family: "Cascadia Code", monospace; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>🎮 B-Box 移动 Action 测试面板</h1>
+  <button id="btn-connect" class="btn accent">🔌 连接串口</button>
+  <span style="display:flex;align-items:center;gap:5px">
+    <span id="dot" class="dot off"></span>
+    <span id="status-text">未连接</span>
+  </span>
+  <span class="spacer"></span>
+  <span class="mono" style="color:var(--dim);font-size:11px" id="proto-info">proto v1 · 115200 8N1</span>
+</div>
+
+<div id="main">
+
+  <!-- ============ 左列：姿态全局参考 + 引导采集 + 事件统计 ============ -->
+  <div id="col-left" class="col">
+    <div class="pane">
+      <h2>📐 姿态全局参考 <span class="hint">IMUQ 四元数 · 判向以此为准</span></h2>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div id="cube-stage"><div id="cube">
+          <div class="face f">前</div><div class="face b">后</div>
+          <div class="face l">左</div><div class="face r">右</div>
+          <div class="face u">上</div><div class="face d">下</div>
+        </div></div>
+        <div style="flex:1">
+          <div class="imu-grid3">
+            <div class="imu-cell"><div class="lbl">Roll °</div><div class="val big" id="v-roll">--</div></div>
+            <div class="imu-cell"><div class="lbl">Pitch °</div><div class="val big" id="v-pitch">--</div></div>
+            <div class="imu-cell"><div class="lbl">Yaw °<span style="color:#d2991d"> 漂移勿信</span></div><div class="val big" id="v-yaw">--</div></div>
+          </div>
+          <div class="imu-grid" style="margin-top:6px;grid-template-columns:repeat(4,1fr)">
+            <div class="imu-cell"><div class="lbl">qw</div><div class="val" id="v-qw">--</div></div>
+            <div class="imu-cell"><div class="lbl">qx</div><div class="val" id="v-qx">--</div></div>
+            <div class="imu-cell"><div class="lbl">qy</div><div class="val" id="v-qy">--</div></div>
+            <div class="imu-cell"><div class="lbl">qz</div><div class="val" id="v-qz">--</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        固件判向 = 四元数倾斜补偿后<b>去 yaw</b> 的机体航向系（前=盒体箭头方向）。
+        yaw 无磁力计参考会持续漂移，仅 roll/pitch 可信，判向不受影响。
+      </div>
+      <div class="cmd-row">
+        <button class="btn" id="btn-calibrate" style="flex:1">🔧 重新校准（静置后点击）</button>
+      </div>
+    </div>
+
+    <div class="pane">
+      <h2>🎯 引导采集 <span class="hint">按指令平移 → 导出数据调参</span></h2>
+      <div class="cmd-row" style="margin-top:0">
+        <select id="rec-reps">
+          <option value="3">每方向 3 次（快，~50s）</option>
+          <option value="5" selected>每方向 5 次（推荐，~75s）</option>
+          <option value="8">每方向 8 次（细，~115s）</option>
+        </select>
+        <button class="btn accent" id="btn-rec-start">开始</button>
+      </div>
+      <div class="note">
+        全屏指令引导：校准零偏→静默期→静置→前/后/左/右各 N 次（哔声提示时推动，推完回位）→静置。
+        结束自动下载 JSON（含原始加速度/世界系加速度/EVT，逐帧带指令标签）。
+      </div>
+      <div class="cmd-row">
+        <button class="btn" id="btn-rec-export" style="flex:1">重新导出上次数据</button>
+      </div>
+    </div>
+
+    <div class="pane" style="flex:1">
+      <h2>📊 移动事件统计 <span class="hint">来自板子上报 EVT</span></h2>
+      <div id="event-stats">
+        <div class="stat fwd"><span class="name">FORWARD 前</span><span class="num" id="cnt-MOVE_FORWARD">0</span></div>
+        <div class="stat back"><span class="name">BACKWARD 后</span><span class="num" id="cnt-MOVE_BACKWARD">0</span></div>
+        <div class="stat left"><span class="name">LEFT 左</span><span class="num" id="cnt-MOVE_LEFT">0</span></div>
+        <div class="stat right"><span class="name">RIGHT 右</span><span class="num" id="cnt-MOVE_RIGHT">0</span></div>
+        <div class="stat rot"><span class="name">ROTATE 旋转</span><span class="num" id="cnt-ROTATE">0</span></div>
+        <div class="stat other"><span class="name">OTHER 其他</span><span class="num" id="cnt-OTHER">0</span></div>
+      </div>
+      <div id="last-event">最近事件：--</div>
+      <div style="margin-top:8px">
+        <button class="btn" id="btn-reset-stats" style="width:100%">重置统计</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 中列：上行消息流 ============ -->
+  <div id="col-mid" class="col">
+    <div class="pane">
+      <h2>📡 上行消息流 <span class="hint">板子 → PC（实时）</span></h2>
+      <div class="stream-ctrl">
+        <label><input type="checkbox" id="filt-evt" checked> EVT</label>
+        <label><input type="checkbox" id="filt-imu"> IMU</label>
+        <label><input type="checkbox" id="filt-imuq" checked> IMUQ</label>
+        <label><input type="checkbox" id="filt-hb"> HEARTBEAT</label>
+        <label><input type="checkbox" id="filt-ok"> OK/NAK</label>
+        <label><input type="checkbox" id="filt-log"> LOG</label>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-clear-stream">清空</button>
+        <label style="font-size:10px"><input type="checkbox" id="autoscroll" checked> 自动滚</label>
+      </div>
+      <div id="msg-stream"></div>
+    </div>
+  </div>
+
+  <!-- ============ 右列：推动判定复现 + 原始 IMU ============ -->
+  <div id="col-right" class="col">
+    <div class="pane">
+      <h2>🧭 推动方向判定复现 <span class="hint">与固件 0.8.0 逻辑一致</span></h2>
+      <div class="note" id="mode-note">
+        用 IMUQ 四元数把加速度<b>倾斜补偿到水平面并去 yaw</b>，在机体航向系判前后左右
+        —— 与固件 pushDetect 输入完全一致，前=盒体箭头方向。
+      </div>
+      <div id="compass-wrap"><canvas id="compass"></canvas></div>
+      <div class="kv"><span class="k">判定方向：</span><span class="v" id="judge-dir">--</span></div>
+      <div class="kv"><span class="k">动态 dynX/dynY：</span><span class="v" id="judge-dyn">--</span></div>
+      <div class="kv"><span class="k">模长 / 阈值：</span><span class="v" id="judge-mag">--</span></div>
+    </div>
+
+    <div class="pane" style="flex:1">
+      <h2>📈 原始 IMU <span class="hint">DEBUG 模式 50Hz</span></h2>
+      <div class="imu-grid">
+        <div class="imu-cell"><div class="lbl">ax (g)</div><div class="val" id="v-ax">--</div></div>
+        <div class="imu-cell"><div class="lbl">ay (g)</div><div class="val" id="v-ay">--</div></div>
+        <div class="imu-cell"><div class="lbl">az (g)</div><div class="val" id="v-az">--</div></div>
+        <div class="imu-cell"><div class="lbl">|a| (g)</div><div class="val" id="v-amag">--</div></div>
+        <div class="imu-cell"><div class="lbl">gx °/s</div><div class="val" id="v-gx">--</div></div>
+        <div class="imu-cell"><div class="lbl">gy °/s</div><div class="val" id="v-gy">--</div></div>
+        <div class="imu-cell"><div class="lbl">gz °/s</div><div class="val" id="v-gz">--</div></div>
+        <div class="imu-cell"><div class="lbl">ms</div><div class="val" id="v-ms">--</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 引导采集全屏遮罩 -->
+<div id="rec-overlay" hidden>
+  <div id="rec-progress">步骤 0/0</div>
+  <div id="rec-arrow">·</div>
+  <div id="rec-instruction">准备中…</div>
+  <div id="rec-bar"><div id="rec-bar-fill"></div></div>
+  <div id="rec-stats-line">IMU 帧: 0 · EVT: 0</div>
+  <button class="btn danger" id="btn-rec-cancel">取消采集 (Esc)</button>
+</div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
