@@ -6,7 +6,7 @@
 /** 上行消息类型（板 -> PC） */
 export type UpType =
   | 'BOOT' | 'HEARTBEAT' | 'EVT' | 'OK' | 'NAK' | 'PONG'
-  | 'IMU' | 'IMUQ' | 'LOG' | 'UNKNOWN';
+  | 'IMU' | 'IMUQ' | 'TILTS' | 'LOG' | 'UNKNOWN';
 
 /** 解析后的上行消息（判别联合） */
 export type UpMessage =
@@ -19,6 +19,7 @@ export type UpMessage =
   | { type: 'IMU'; ax: number; ay: number; az: number; gx: number; gy: number; gz: number; ms: number; raw: string }
   | { type: 'IMUQ'; qw: number; qx: number; qy: number; qz: number; ms: number; raw: string }
   | { type: 'LOG'; text: string; raw: string }
+  | { type: 'TILTS'; pitch: number; roll: number; ms: number; raw: string }
   | { type: 'UNKNOWN'; raw: string };
 
 /** IMU 原始采样（与 imu-viewer 保持兼容的形状） */
@@ -94,6 +95,10 @@ export function parseLine(line: string): UpMessage {
         qw: num(p[0]), qx: num(p[1]), qy: num(p[2]), qz: num(p[3]),
         ms: num(p[4]), raw,
       };
+    }
+    case 'TILTS': {
+      // TILTS,<pitchDeg>,<rollDeg>,<ms>
+      return { type: 'TILTS', pitch: num(p[0]), roll: num(p[1]), ms: num(p[2]), raw };
     }
     case 'LOG': {
       return { type: 'LOG', text: rest, raw };

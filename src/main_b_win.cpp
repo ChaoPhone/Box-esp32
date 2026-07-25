@@ -190,6 +190,11 @@ static void forwardToPc(const char *data) {
     Serial.println(data);
   } else {
     droppedFrames++;
+    // 调试：把脏帧输出以便溯源
+    Serial.print("DBG,JUNK,len=");
+    Serial.print(strlen(data));
+    Serial.print(",");
+    Serial.println(data);
   }
 }
 

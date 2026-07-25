@@ -142,6 +142,8 @@ function dispatch(cbs: Callbacks, msg: UpMessage): void {
   switch (msg.type) {
     case 'EVT':
       cbs.onEvt(msg.seq, msg.action, msg.value, msg.ms);
+      // 自动回复 ACK 停止板子重传
+      send('ACK,' + msg.seq);
       break;
     case 'IMU':
       cbs.onImu({ ax: msg.ax, ay: msg.ay, az: msg.az, gx: msg.gx, gy: msg.gy, gz: msg.gz, ms: msg.ms });

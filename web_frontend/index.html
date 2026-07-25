@@ -96,7 +96,7 @@
     .msg { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
     .msg .ts { color: #484f58; }
     .msg .ty { font-weight: 700; }
-    .ty-EVT { color: #79c0ff; } .ty-IMU { color: #bc8cff; } .ty-IMUQ { color: #d2a8ff; }
+    .ty-EVT { color: #79c0ff; } .ty-TILTS { color: #56d364; } .ty-IMU { color: #bc8cff; } .ty-IMUQ { color: #d2a8ff; }
     .ty-OK { color: #3fb950; } .ty-NAK { color: #f85149; } .ty-LOG { color: #8b949e; }
     .ty-HEARTBEAT { color: #d2991d; } .ty-BOOT { color: #58a6ff; } .ty-PONG { color: #3fb950; }
     .stream-ctrl { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
@@ -239,11 +239,13 @@
       <h2>📡 上行消息流 <span class="hint">板子 → PC（实时）</span></h2>
       <div class="stream-ctrl">
         <label><input type="checkbox" id="filt-evt" checked> EVT</label>
+        <label><input type="checkbox" id="filt-tilts"> TILTS</label>
         <label><input type="checkbox" id="filt-imu"> IMU</label>
-        <label><input type="checkbox" id="filt-imuq" checked> IMUQ</label>
+        <label><input type="checkbox" id="filt-imuq"> IMUQ</label>
         <label><input type="checkbox" id="filt-hb"> HEARTBEAT</label>
         <label><input type="checkbox" id="filt-ok"> OK/NAK</label>
         <label><input type="checkbox" id="filt-log"> LOG</label>
+        <label><input type="checkbox" id="filt-unknown"> UNKNOWN</label>
         <span class="spacer"></span>
         <button class="btn" id="btn-clear-stream">清空</button>
         <label style="font-size:10px"><input type="checkbox" id="autoscroll" checked> 自动滚</label>

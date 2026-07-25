@@ -38,9 +38,10 @@ document.getElementById('btn-reset-stats')!.addEventListener('click', ui.resetSt
 document.getElementById('btn-clear-stream')!.addEventListener('click', ui.clearStream);
 
 // ---- 消息流过滤 ----
-const filterMap: Record<string, 'EVT' | 'IMU' | 'IMUQ' | 'HEARTBEAT' | 'OK' | 'LOG'> = {
-  'filt-evt': 'EVT', 'filt-imu': 'IMU', 'filt-imuq': 'IMUQ',
+const filterMap: Record<string, string> = {
+  'filt-evt': 'EVT', 'filt-tilts': 'TILTS', 'filt-imu': 'IMU', 'filt-imuq': 'IMUQ',
   'filt-hb': 'HEARTBEAT', 'filt-ok': 'OK', 'filt-log': 'LOG',
+  'filt-unknown': 'UNKNOWN',
 };
 for (const [id, key] of Object.entries(filterMap)) {
   const el = document.getElementById(id) as HTMLInputElement;

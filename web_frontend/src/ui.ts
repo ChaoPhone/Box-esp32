@@ -16,19 +16,22 @@ const stats: Record<string, number> = {
 };
 
 // ---- 消息流过滤 ----
-const filters = {
-  EVT: true, IMU: false, IMUQ: true, HEARTBEAT: false, OK: false, NAK: false, LOG: false,
+const filters: Record<string, boolean> = {
+  EVT: true, TILTS: false, IMU: false, IMUQ: false, HEARTBEAT: false, OK: false, NAK: false, LOG: false,
+  UNKNOWN: false,
 };
 
-function filterKey(m: UpMessage): keyof typeof filters | null {
+function filterKey(m: UpMessage): string | null {
   switch (m.type) {
     case 'EVT': return 'EVT';
     case 'IMU': return 'IMU';
     case 'IMUQ': return 'IMUQ';
+    case 'TILTS': return 'TILTS';
     case 'HEARTBEAT': return 'HEARTBEAT';
     case 'OK': return 'OK';
     case 'NAK': return 'NAK';
     case 'LOG': return 'LOG';
+    case 'UNKNOWN': return 'UNKNOWN';
     default: return null;
   }
 }
@@ -211,7 +214,7 @@ export function drawCompass(j: PushJudge): void {
   $('judge-mag').textContent = `${fmt(j.mag, 3)} / ${j.threshold.toFixed(2)}`;
 }
 
-export function setFilter(key: keyof typeof filters, on: boolean): void {
+export function setFilter(key: string, on: boolean): void {
   filters[key] = on;
 }
 
