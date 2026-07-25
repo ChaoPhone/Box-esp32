@@ -581,10 +581,9 @@ void loop() {
         float bx = cy*wx + sy*wy, by = -sy*wx + cy*wy;
         uint32_t nowMs = millis();
 
-        // 倾斜（最高优先级）
+        // 倾斜 → 已改为持续状态 TILTS 消息上报（不再发 EVT）
         float tiltVal = 0;
-        const char* tiltDir = tiltDetect(tiltVal);
-        if (tiltDir) emitEvent(tiltDir, tiltVal);
+        tiltDetect(tiltVal); // 维持 re-arm 状态机，但不发射 EVT
 
         // 推动（中等优先级）
         const char* pushDir = pushDetect(bx, by);

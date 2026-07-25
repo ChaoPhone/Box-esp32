@@ -18,8 +18,8 @@
 //    HEARTBEAT,<ms>,<state>              约 1Hz 心跳
 //    EVT,<seq>,<action>,<value>,<ms>     高层动作事件（需 ACK），action 可为：
 //                                        MOVE_FORWARD/BACKWARD/LEFT/RIGHT（水平推动）
-//                                        TILT_FORWARD/BACKWARD/LEFT/RIGHT（倾斜 >45°）
-//                                        LIFT_UP（向上抬举加速度脉冲）
+//                                        LIFT_UP（向上提起）
+//    TILTS,<pitch>,<roll>,<ms>           倾斜持续状态（与 IMUQ 同频上报）
 //    OK,<TYPE>[,<detail...>]             下行命令已执行的确认
 //    NAK,<TYPE>,<reason>                 下行命令被拒绝/未识别
 //    PONG[,<token>]                      对 PING 的应答
@@ -338,6 +338,20 @@ static void sendImuQuat() {
   snprintf(buf, sizeof(buf), "IMUQ,%.4f,%.4f,%.4f,%.4f,%lu",
            mahonyQ[0], mahonyQ[1], mahonyQ[2], mahonyQ[3],
            (unsigned long)millis());
+  Serial.println(buf);
+}
+
+// 倾斜持续状态上报：TILTS,<pitchDeg>,<rollDeg>,<ms>
+static void sendTiltState() {
+  float qw = mahonyQ[0], qx = mahonyQ[1], qy = mahonyQ[2], qz = mahonyQ[3];
+  float roll  = atan2f(2.0f*(qw*qx+qy*qz), 1.0f-2.0f*(qx*qx+qy*qy));
+  float sinp  = 2.0f*(qw*qy-qz*qx);
+  if (sinp >  1.0f) sinp =  1.0f;
+  if (sinp < -1.0f) sinp = -1.0f;
+  float pitch = asinf(sinp);
+  char buf[96];
+  snprintf(buf, sizeof(buf), "TILTS,%.2f,%.2f,%lu",
+           pitch * 57.29578f, roll * 57.29578f, (unsigned long)millis());
   Serial.println(buf);
 }
 
@@ -897,12 +911,11 @@ static void pollImu() {
   float bx =  cy * wx + sy * wy;   // Rz(-yaw)·[wx, wy]
   float by = -sy * wx + cy * wy;
   uint32_t nowMs = millis();
-  // 姿态倾斜检测（优先级：TILT > MOVE > LIFT_UP）
+  // 倾斜 → 已改为持续状态 TILTS 消息上报（不再发 EVT）
   float tiltValue = 0;
-  const char* tiltDir = tiltDetect(tiltValue);
-  if (tiltDir) emitEvent(tiltDir, tiltValue, true);
+  tiltDetect(tiltValue); // 维持 re-arm 状态机，不发射 EVT
 
-  // 推动脉冲检测（tiltDetect 触发后 pending.active 会自然拦截）
+  // 推动脉冲检测
   const char* dir = pushDetect(bx, by);
   if (dir) emitEvent(dir, 200.0f, true);
 
@@ -920,8 +933,10 @@ static void pollImu() {
   if (nowMs - lastImuStream < interval) return;
   lastImuStream = nowMs;
 
-  // 输出四元数（常态和 DEBUG 都输出 IMUQ）
+  // 输出四元数
   sendImuQuat();
+  // 倾斜持续状态
+  sendTiltState();
 
   // DEBUG 模式下额外输出原始 IMU 数据用于前端调试
   if (debugMode) sendImuTelemetry();
