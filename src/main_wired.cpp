@@ -30,7 +30,7 @@
 //  下行（Bridge/Unity -> 板）：
 //    STATE,<name>        游戏状态可视化（IDLE/MOVE/WALL/WIN/LOSE/OFF...）
 //    LED,<r>,<g>,<b>     直接设色（0-255），调试/覆盖
-//    HAPTIC,<pattern>[,<ms>]  触觉反馈（马达未到货，先用灯+屏蔽窗口模拟）
+//    HAPTIC,<pattern>[,<ms>]  触觉反馈（震动电机 GPIO1，PWM 驱动）
 //    ACK,<seq>           确认某条上行 EVT
 //    PING[,<token>]      存活探测 -> 板回 PONG
 //    CALIBRATE           传感器标定
@@ -73,7 +73,14 @@ static const float GYRO_LSB_PER_DPS = 131.0f;     // ±250°/s 量程
 static const uint32_t HEARTBEAT_INTERVAL_MS = 1000;  // 心跳间隔
 static const uint32_t ACK_TIMEOUT_MS = 300;          // 等 ACK 超时后重传
 static const int MAX_RETRY = 5;                      // 最大重传次数
-static const uint32_t HAPTIC_GUARD_MS = 150;         // 震动屏蔽窗口（模拟）
+static const uint32_t HAPTIC_GUARD_MS = 150;         // 震动屏蔽窗口
+
+// 震动电机（GPIO1，LEDC PWM 驱动，1kHz / 8bit）
+static const int MOTOR_PIN = 1;
+static const int MOTOR_PWM_CH = 0;
+static const int MOTOR_PWM_FREQ = 1000;
+static const int MOTOR_PWM_RES = 8;  // 0–255
+static uint32_t motorEndMs = 0;       // 电机自动停止时刻（0=未运行）
 static const uint32_t BUTTON_DEBOUNCE_MS = 40;       // 按钮消抖
 static const uint32_t IMU_SAMPLE_US = 5000;          // IMU 采样固定 200Hz（micros 定时，与上报解耦）
 static const uint32_t IMU_STREAM_NORMAL_MS = 50;     // 常态 IMU 上报间隔（20Hz）
@@ -713,10 +720,38 @@ static void handleCommand(String line) {
     return;
   }
   if (line.startsWith("HAPTIC,")) {
-    // 马达未到货：记录 + 模拟屏蔽窗口，并用灯闪一下表示收到反馈
+    // HAPTIC,<pattern>[,<ms>]
+    //   pattern: "short"(50ms) / "long"(300ms) / "double"(双震) / 数字(0-255=PWM强度)
+    //   ms: 持续时间（覆盖 pattern 默认值）
+    String args = line.substring(7);
+    int c = args.indexOf(',');
+    String pattern = (c >= 0) ? args.substring(0, c) : args;
+    pattern.trim();
+    uint32_t duration = 150;  // 默认 150ms
+    if (c >= 0) {
+      String msStr = args.substring(c + 1);
+      msStr.trim();
+      if (msStr.length() > 0) duration = msStr.toInt();
+    }
+
+    uint8_t strength = 200;  // 默认强度 ~78%
+    if (pattern == "short")       { duration = 50;  }
+    else if (pattern == "long")   { duration = 300; }
+    else if (pattern == "double") { duration = 50;  /* 单次短震，double 后续扩展 */ }
+    else {
+      int s = pattern.toInt();
+      if (s > 0 && s <= 255) strength = (uint8_t)s;
+    }
+
+    ledcWrite(MOTOR_PWM_CH, strength);
+    motorEndMs = millis() + duration;
+
     hapticGuardUntil = millis() + HAPTIC_GUARD_MS;
-    setLed(LED_BRIGHTNESS, 0, LED_BRIGHTNESS);  // 紫：收到一次触觉反馈
-    sendOk("HAPTIC", line.substring(7).c_str());
+    setLed(LED_BRIGHTNESS, 0, LED_BRIGHTNESS);  // 紫灯确认
+
+    char buf[48];
+    snprintf(buf, sizeof(buf), "motor=%u,%lums", strength, (unsigned long)duration);
+    sendOk("HAPTIC", buf);
     return;
   }
   if (line.startsWith("CALIBRATE")) {
@@ -873,7 +908,12 @@ static void pollImu() {
 
   // 向上抬举检测（优先级最低）
   const char* liftDir = liftDetect(wz);
-  if (liftDir) emitEvent(liftDir, 200.0f, true);
+  if (liftDir) {
+    emitEvent(liftDir, 200.0f, true);
+    // LIFT_UP 触发时短震确认
+    ledcWrite(MOTOR_PWM_CH, 255);
+    motorEndMs = millis() + 150;
+  }
 
   // ---- 上报段：独立限流 ----
   uint32_t interval = debugMode ? IMU_STREAM_DEBUG_MS : IMU_STREAM_NORMAL_MS;
@@ -892,6 +932,12 @@ void setup() {
   Serial.begin(BAUD);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(MPU_INT_PIN, INPUT);
+
+  // 初始化震动电机 PWM
+  ledcSetup(MOTOR_PWM_CH, MOTOR_PWM_FREQ, MOTOR_PWM_RES);
+  ledcAttachPin(MOTOR_PIN, MOTOR_PWM_CH);
+  ledcWrite(MOTOR_PWM_CH, 0);
+
   delay(200);
 
   // 初始化 I2C 并检测 MPU6050
@@ -946,5 +992,11 @@ void loop() {
     char buf[48];
     snprintf(buf, sizeof(buf), "HEARTBEAT,%lu,STABLE", (unsigned long)now);
     Serial.println(buf);
+  }
+
+  // 震动电机超时自动停止
+  if (motorEndMs && now >= motorEndMs) {
+    ledcWrite(MOTOR_PWM_CH, 0);
+    motorEndMs = 0;
   }
 }

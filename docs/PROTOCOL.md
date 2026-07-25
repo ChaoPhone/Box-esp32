@@ -152,7 +152,7 @@ TYPE,arg1,arg2,...,argN\n
 |---|---|---|---|
 | `STATE` | `STATE,<name>` | **核心：发送游戏状态**，板子据此做可视反馈（当前=板载 WS2812 灯上色，后续换屏幕/马达不改协议）。 | `OK,STATE,<NAME>,<r>,<g>,<b>` / `NAK,STATE,unknown` |
 | `LED` | `LED,<r>,<g>,<b>` | 直接指定 RGB（各 0–255），用于调试或自定义效果，绕过状态映射。 | `OK,LED,<r>,<g>,<b>` / `NAK,LED,badargs` |
-| `HAPTIC` | `HAPTIC,<pattern>[,<ms>]` | 触觉反馈（马达未到货，现用紫灯+屏蔽窗口模拟）。 | `OK,HAPTIC,<pattern...>` |
+| `HAPTIC` | `HAPTIC,<pattern>[,<ms>]` | 震动电机反馈（GPIO1，PWM 驱动）。pattern：`short`(50ms)/`long`(300ms)/`double`(双震)/`0-255`(PWM 强度)。ms 覆盖默认时长。 | `OK,HAPTIC,motor=<强度>,<时长>ms` |
 | `ACK` | `ACK,<seq>` | 确认收到板子的 `EVT,<seq>`（见 §3）。 | 无回复（内部清除待确认） |
 | `PING` | `PING` 或 `PING,<token>` | 存活/往返探测。 | `PONG` / `PONG,<token>` |
 | `CALIBRATE` | `CALIBRATE` | **完整复位链**：陀螺零偏标定（约 1s，200 样本）→ 姿态四元数重置 → 推动检测基线/状态清零 → 进入 1.5s 静默期。**标定期间必须保持盒子静止**。 | 有 IMU：`OK,CALIBRATE,gx=..,gy=..,gz=..`；无 IMU：`OK,CALIBRATE,no-sensor`；读失败：`NAK,CALIBRATE,read-fail` |
